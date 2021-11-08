@@ -4,42 +4,57 @@
 # 自行拉取插件之前请SSH连接进入固件配置里面确认过没有你要的插件再单独拉取你需要的插件
 # 不要一下就拉取别人一个插件包N多插件的，多了没用，增加编译错误，自己需要的才好
 # 修改IP项的EOF于EOF之间请不要插入其他扩展代码，可以删除或注释里面原本的代码
-# 如果你的OP是当主路由的话，网关、DNS、广播都不需要，代码前面加 # 注释掉，只保留后台地址和子网掩码就可以
-# 如果你有编译ipv6的话，‘去掉LAN口使用内置的 IPv6 管理’代码前面也加 # 注释掉
 
+# 添加UA2F
+git clone https://github.com/leninism/UA2F package/UA2F
 
+# 更新queue
+svn checkout https://github.com/openwrt/packages/trunk/libs/libnetfilter-queue package/libs/libnetfilter-queue
 
 cat >$NETIP <<-EOF
 uci set network.lan.ipaddr='192.168.2.2'                                    # IPv4 地址(openwrt后台地址)
 uci set network.lan.netmask='255.255.255.0'                                 # IPv4 子网掩码
 uci set network.lan.gateway='192.168.2.1'                                   # IPv4 网关
 uci set network.lan.broadcast='192.168.2.255'                               # IPv4 广播
-uci set network.lan.dns='114.114.114.114 223.5.5.5'                         # DNS(多个DNS要用空格分开)
+#uci set network.lan.dns='114.114.114.114 223.5.5.5'                         # DNS(多个DNS要用空格分开)
 uci set network.lan.delegate='0'                                            # 去掉LAN口使用内置的 IPv6 管理
 uci commit network                                                          # 不要删除跟注释,除非上面全部删除或注释掉了
 #uci set dhcp.lan.ignore='1'                                                 # 关闭DHCP功能
 #uci commit dhcp                                                             # 跟‘关闭DHCP功能’联动,同时启用或者删除跟注释
-uci set system.@system[0].hostname='OpenWrt-123'                            # 修改主机名称为OpenWrt-123
-#sed -i 's/\/bin\/login/\/bin\/login -f root/' /etc/config/ttyd             # 设置ttyd免帐号登录，如若开启，进入OPENWRT后可能要重启一次才生效
+uci set system.@system[0].hostname='desktop-'                            # 修改主机名称为OpenWrt-123
 EOF
+# sed -i 's/luci-theme-bootstrap/luci-theme-argon/g' feeds/luci/collections/luci/Makefile           # 选择argon为默认主题
 
-
-sed -i 's/luci-theme-bootstrap/luci-theme-argon/g' feeds/luci/collections/luci/Makefile           # 选择argon为默认主题
-
-sed -i "s/OpenWrt /${Author} Compiled in $(TZ=UTC-8 date "+%Y.%m.%d") @ OpenWrt /g" $ZZZ          # 增加个性名字${Author}默认为你的github账号
-
-sed -i '/CYXluq4wUazHjmCDBCqXF/d' $ZZZ                                                            # 设置密码为空
-
-
-# K3专用，编译K3的时候只会出K3固件
-#sed -i 's|^TARGET_|# TARGET_|g; s|# TARGET_DEVICES += phicomm_k3|TARGET_DEVICES += phicomm_k3|' target/linux/bcm53xx/image/Makefile
-
-
-# 在线更新时，删除不想保留固件的某个文件，在EOF跟EOF直接加入删除代码，记住这里对应的是固件的文件路径，比如： rm /etc/config/luci
-cat >$DELETE <<-EOF
-
+cat> package/network/config/firewall/files/firewall.user <<EOF
+iptables -t nat -A PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 53
+iptables -t nat -A PREROUTING -p tcp --dport 53 -j REDIRECT --to-ports 53 
+iptables -t mangle -N ua2f
+iptables -t mangle -A ua2f -d 127.0.0.0/8 -j RETURN
+iptables -t mangle -A ua2f -d 192.168.0.0/16 -j RETURN
+iptables -t mangle -A ua2f -p tcp --dport 443 -j RETURN 
+iptables -t mangle -A ua2f -p tcp --dport 22 -j RETURN
+iptables -t mangle -A ua2f -p tcp --dport 80 -j CONNMARK --set-mark 44
+iptables -t mangle -A ua2f -m connmark --mark 43 -j RETURN
+iptables -t mangle -A ua2f -m set --match-set nohttp dst,dst -j RETURN
+iptables -t mangle -A ua2f -j NFQUEUE --queue-num 10010  
+iptables -t mangle -A FORWARD -p tcp -m conntrack --ctdir ORIGINAL -j ua2f
+iptables -t mangle -A FORWARD -p tcp -m conntrack --ctdir REPLY 
+iptables -t nat -N ntp_force_local
+iptables -t nat -I PREROUTING -p udp --dport 123 -j ntp_force_local
+iptables -t nat -A ntp_force_local -d 0.0.0.0/8 -j RETURN
+iptables -t nat -A ntp_force_local -d 127.0.0.0/8 -j RETURN
+iptables -t nat -A ntp_force_local -d 192.168.0.0/16 -j RETURN
+iptables -t nat -A ntp_force_local -s 192.168.0.0/16 -j DNAT --to-destination 192.168.2.2
+iptables -t mangle -A POSTROUTING -j TTL --ttl-set 64
 EOF
-
+        
+cat> package/base-files/files/etc/rc.local <<EOF
+# Put your custom commands here that should be executed once
+# the system init finished. By default this file does nothing.
+ipset create nohttp hash:ip,port hashsize 16384 timeout 300
+/usr/dogcom -m dhcp -c /usr/drcom.conf -d -e
+exit 0
+EOF
 
 # 修改插件名字
 sed -i 's/"aMule设置"/"电驴下载"/g' `grep "aMule设置" -rl ./`
